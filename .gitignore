@@ -1,0 +1,20 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Pytest cache
+.pytest_cache/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# PyCharm settings
+.idea/
+
+# Log files
+*.log
