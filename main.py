@@ -1,10 +1,11 @@
 
-import json
+import time
+import uuid
 
-import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from logging_config import logger
 from llm_client import analyze_job_description
 
 
@@ -18,7 +19,7 @@ app = FastAPI(
         "AI-powered job description analysis, "
         "candidate skill matching, and learning recommendations."
     ),
-    version="4.0.0"
+    version="4.0.0",
 )
 
 
@@ -32,12 +33,10 @@ LEARNING_RECOMMENDATIONS = {
         "and data analysis projects."
     ),
     "SQL": (
-        "Learn joins, subqueries, aggregations, "
-        "and database queries."
+        "Learn joins, subqueries, aggregations, and database queries."
     ),
     "Excel": (
-        "Learn formulas, pivot tables, lookup functions, "
-        "and charts."
+        "Learn formulas, pivot tables, lookup functions, and charts."
     ),
     "Tableau": (
         "Build interactive dashboards using real datasets."
@@ -53,8 +52,7 @@ LEARNING_RECOMMENDATIONS = {
         "and visualization."
     ),
     "Communication": (
-        "Practice explaining technical concepts "
-        "and presenting findings."
+        "Practice explaining technical concepts and presenting findings."
     ),
     "Communication Skills": (
         "Practice professional communication, presentations, "
@@ -65,29 +63,25 @@ LEARNING_RECOMMENDATIONS = {
         "collections, and exception handling."
     ),
     "API Testing": (
-        "Learn HTTP methods, status codes, API validation, "
-        "and Postman."
+        "Learn HTTP methods, status codes, API validation, and Postman."
     ),
     "FastAPI": (
         "Build REST APIs using FastAPI and Pydantic."
     ),
     "REST API": (
-        "Learn HTTP methods, request bodies, responses, "
-        "and status codes."
+        "Learn HTTP methods, request bodies, responses, and status codes."
     ),
     "REST API Development": (
         "Build and test REST endpoints with input validation."
     ),
     "Git": (
-        "Practice commits, branches, merges, "
-        "and GitHub workflows."
+        "Practice commits, branches, merges, and GitHub workflows."
     ),
     "Docker": (
         "Learn containers, Dockerfiles, and image management."
     ),
     "Pandas": (
-        "Practice data manipulation, filtering, grouping, "
-        "and cleaning using Pandas."
+        "Practice data manipulation, filtering, grouping, and cleaning."
     ),
     "NumPy": (
         "Learn arrays, vectorized operations, and numerical computing."
@@ -100,13 +94,11 @@ LEARNING_RECOMMENDATIONS = {
         "Practice creating clear, professional presentations."
     ),
     "LangChain": (
-        "Learn LLM application development, prompts, "
-        "retrievers, and tool integration."
-    )
+        "Learn LLM application development, prompts, retrievers, "
+        "and tool integration."
+    ),
 }
 
-
-# Normalize recommendation keys for case-insensitive lookup.
 NORMALIZED_RECOMMENDATIONS = {
     skill.casefold(): recommendation
     for skill, recommendation in LEARNING_RECOMMENDATIONS.items()
@@ -200,7 +192,7 @@ def remove_duplicate_skills(skills: list[str]) -> list[str]:
 # =========================================================
 
 def generate_recommendations(
-    missing_skills: list[str]
+    missing_skills: list[str],
 ) -> list[dict]:
     """Generate recommendations for missing candidate skills."""
 
@@ -212,19 +204,70 @@ def generate_recommendations(
             (
                 f"Study {skill} fundamentals, practice with examples, "
                 "and complete a practical project."
-            )
+            ),
         )
 
-        recommendations.append({
-            "skill": skill,
-            "recommendation": recommendation
-        })
+        recommendations.append(
+            {
+                "skill": skill,
+                "recommendation": recommendation,
+            }
+        )
 
     return recommendations
 
 
 # =========================================================
-# 6. HOME AND HEALTH-CHECK ENDPOINTS
+# 6. REQUEST LOGGING MIDDLEWARE
+# =========================================================
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    start_time = time.perf_counter()
+
+    logger.info(
+        "Request started | request_id=%s | method=%s | path=%s",
+        request_id,
+        request.method,
+        request.url.path,
+    )
+
+    try:
+        response = await call_next(request)
+
+        duration = time.perf_counter() - start_time
+        response.headers["X-Request-ID"] = request_id
+
+        logger.info(
+            "Request completed | request_id=%s | method=%s | "
+            "path=%s | status_code=%s | duration_seconds=%.3f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration,
+        )
+
+        return response
+
+    except Exception:
+        duration = time.perf_counter() - start_time
+
+        logger.exception(
+            "Request failed | request_id=%s | method=%s | "
+            "path=%s | duration_seconds=%.3f",
+            request_id,
+            request.method,
+            request.url.path,
+            duration,
+        )
+
+        raise
+
+
+# =========================================================
+# 7. HOME AND HEALTH-CHECK ENDPOINTS
 # =========================================================
 
 @app.get("/")
@@ -235,9 +278,9 @@ def home():
             "GET /",
             "GET /health",
             "POST /analyze",
-            "POST /match"
+            "POST /match",
         ],
-        "status": "success"
+        "status": "success",
     }
 
 
@@ -245,72 +288,56 @@ def home():
 def health_check():
     return {
         "api_status": "healthy",
-        "status": "success"
+        "status": "success",
     }
 
 
 # =========================================================
-# 7. ANALYZE JOB DESCRIPTION USING THE LLM
+# 8. ANALYZE JOB DESCRIPTION USING THE LLM
 # =========================================================
 
 @app.post("/analyze")
 def analyze_job(request: JobRequest):
-    """
-    Analyze a job description using the local Ollama LLM.
-
-    Returns the extracted job information, detected skills,
-    and learning recommendations.
-    """
+    """Analyze a job description and recommend learning resources."""
 
     try:
-        analysis = analyze_job_description(
-            request.job_description
-        )
+        analysis = analyze_job_description(request.job_description)
 
-        # Validate the LLM output.
         if not isinstance(analysis, dict):
-            raise ValueError(
-                "LLM response must be a JSON object."
-            )
+            raise ValueError("LLM response must be a JSON object.")
 
         llm_job_title = analysis.get("job_title", "")
         required_skills = analysis.get("required_skills")
         experience_level = analysis.get(
             "experience_level",
-            "Not specified"
+            "Not specified",
         )
 
         if not isinstance(llm_job_title, str):
-            raise ValueError(
-                "Invalid job_title returned by the LLM."
-            )
+            raise ValueError("Invalid job title returned by the LLM.")
 
         if not isinstance(required_skills, list):
-            raise ValueError(
-                "LLM required_skills must be a list."
-            )
-
-        if not isinstance(experience_level, str):
-            raise ValueError(
-                "Invalid experience_level returned by the LLM."
-            )
+            raise ValueError("LLM required_skills must be a list.")
 
         if not all(
             isinstance(skill, str) and skill.strip()
             for skill in required_skills
         ):
+            raise ValueError("LLM returned invalid required skills.")
+
+        if not isinstance(experience_level, str):
             raise ValueError(
-                "LLM returned invalid required skills."
+                "Invalid experience level returned by the LLM."
             )
 
-        # Clean and deduplicate the extracted skills.
-        detected_skills = remove_duplicate_skills(
-            required_skills
-        )
+        detected_skills = remove_duplicate_skills(required_skills)
 
-        # Generate learning recommendations.
-        recommendations = generate_recommendations(
-            detected_skills
+        recommendations = generate_recommendations(detected_skills)
+
+        logger.info(
+            "Job analysis completed | job_title=%s | skills_count=%s",
+            llm_job_title,
+            len(detected_skills),
         )
 
         return {
@@ -319,77 +346,67 @@ def analyze_job(request: JobRequest):
             "llm_analysis": {
                 "job_title": llm_job_title,
                 "required_skills": detected_skills,
-                "experience_level": experience_level
+                "experience_level": experience_level,
             },
             "detected_skills": detected_skills,
             "total_skills": len(detected_skills),
             "recommendations": recommendations,
-            "status": "success"
+            "status": "success",
         }
 
     except RuntimeError as exc:
-        # llm_client.py converts Ollama request failures
-        # into RuntimeError.
         error_message = str(exc).casefold()
 
         if "timed out" in error_message or "timeout" in error_message:
+            logger.error("Job analysis failed because the LLM timed out")
+
             raise HTTPException(
                 status_code=504,
                 detail=(
-                    "The local LLM request timed out. "
-                    "Please try again."
-                )
+                    "The local LLM request timed out. Please try again."
+                ),
             ) from exc
+
+        logger.error("Job analysis failed because the LLM is unavailable")
 
         raise HTTPException(
             status_code=503,
             detail=(
                 "The local LLM service is unavailable. "
                 "Please check Ollama and try again."
-            )
+            ),
         ) from exc
 
-    except requests.exceptions.Timeout as exc:
-        # Handles timeouts if a requests timeout exception
-        # reaches this endpoint directly.
-        raise HTTPException(
-            status_code=504,
-            detail=(
-                "The local LLM request timed out. "
-                "Please try again."
-            )
-        ) from exc
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.error(
+            "Invalid LLM analysis response | error_type=%s",
+            type(exc).__name__,
+        )
 
-    except requests.exceptions.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Unable to communicate with the local Ollama LLM."
-        ) from exc
-
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=502,
             detail=(
-                "The LLM returned an invalid response. "
-                "Please try again."
-            )
+                "The LLM returned an invalid response. Please try again."
+            ),
+        ) from exc
+
+    except Exception as exc:
+        logger.exception("Unexpected error during job analysis")
+
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred during job analysis.",
         ) from exc
 
 
 # =========================================================
-# 8. MATCH CANDIDATE SKILLS AGAINST JOB REQUIREMENTS
+# 9. MATCH CANDIDATE SKILLS AGAINST JOB REQUIREMENTS
 # =========================================================
 
 @app.post("/match")
 def match_skills(request: MatchRequest):
-    """
-    Compare candidate skills with required job skills.
+    """Compare candidate skills with required job skills."""
 
-    Calculates the match percentage, identifies missing skills,
-    and generates learning recommendations.
-    """
-
-    # Remove duplicates before calculating the percentage.
     candidate_skills = remove_duplicate_skills(
         request.candidate_skills
     )
@@ -401,53 +418,51 @@ def match_skills(request: MatchRequest):
     if not candidate_skills:
         raise HTTPException(
             status_code=422,
-            detail="At least one valid candidate skill is required."
+            detail="At least one valid candidate skill is required.",
         )
 
     if not required_skills:
         raise HTTPException(
             status_code=422,
-            detail="At least one valid required skill is required."
+            detail="At least one valid required skill is required.",
         )
 
-    # Normalize candidate skills for case-insensitive matching.
     candidate_skill_lookup = {
         skill.casefold()
         for skill in candidate_skills
     }
 
-    # Find matching skills.
     matching_skills = [
         skill
         for skill in required_skills
         if skill.casefold() in candidate_skill_lookup
     ]
 
-    # Find missing skills.
     missing_skills = [
         skill
         for skill in required_skills
         if skill.casefold() not in candidate_skill_lookup
     ]
 
-    # Calculate the match percentage.
     total_required_skills = len(required_skills)
     total_matching_skills = len(matching_skills)
 
     match_percentage = round(
-        (
-            total_matching_skills
-            / total_required_skills
-        ) * 100,
-        2
+        (total_matching_skills / total_required_skills) * 100,
+        2,
     )
 
-    # Generate recommendations for missing skills only.
-    recommendations = generate_recommendations(
-        missing_skills
+    recommendations = generate_recommendations(missing_skills)
+
+    logger.info(
+        "Skill matching completed | job_title=%s | required=%s | "
+        "matched=%s | match_percentage=%.2f",
+        request.job_title,
+        total_required_skills,
+        total_matching_skills,
+        match_percentage,
     )
 
-    # Return the structured result.
     return {
         "job_title": request.job_title,
         "matching_skills": matching_skills,
@@ -456,6 +471,6 @@ def match_skills(request: MatchRequest):
         "total_matching_skills": total_matching_skills,
         "match_percentage": match_percentage,
         "recommendations": recommendations,
-        "status": "success"
+        "status": "success",
     }
 
