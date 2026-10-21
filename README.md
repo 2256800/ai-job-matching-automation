@@ -59,3 +59,12 @@ Analysis Result     Missing Skills
                          |
                          v
                 Learning Recommendations
+
+## 📸 Project Screenshots
+
+### Job Description Analysis
+
+The API analyzes job descriptions using a locally hosted LLM
+and returns extracted skills and learning recommendations.
+
+![Job Description Analysis](assets/analyze-response.png)
