@@ -1,6 +1,7 @@
-import json
-import requests
 
+import json
+
+import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -98,10 +99,14 @@ LEARNING_RECOMMENDATIONS = {
     "PowerPoint": (
         "Practice creating clear, professional presentations."
     ),
+    "LangChain": (
+        "Learn LLM application development, prompts, "
+        "retrievers, and tool integration."
+    )
 }
 
 
-# Normalize keys so recommendations are case-insensitive.
+# Normalize recommendation keys for case-insensitive lookup.
 NORMALIZED_RECOMMENDATIONS = {
     skill.casefold(): recommendation
     for skill, recommendation in LEARNING_RECOMMENDATIONS.items()
@@ -130,9 +135,7 @@ class JobRequest(BaseModel):
 
 class MatchRequest(BaseModel):
     job_title: str = Field(min_length=1)
-
     candidate_skills: list[str] = Field(min_length=1)
-
     required_skills: list[str] = Field(min_length=1)
 
     @field_validator("job_title")
@@ -208,7 +211,7 @@ def generate_recommendations(
             skill.casefold(),
             (
                 f"Study {skill} fundamentals, practice with examples, "
-                f"and complete a practical project."
+                "and complete a practical project."
             )
         )
 
@@ -221,7 +224,7 @@ def generate_recommendations(
 
 
 # =========================================================
-# 6. HOME / HEALTH-CHECK ENDPOINT
+# 6. HOME AND HEALTH-CHECK ENDPOINTS
 # =========================================================
 
 @app.get("/")
@@ -232,7 +235,7 @@ def home():
             "GET /",
             "GET /health",
             "POST /analyze",
-            "POST /match",
+            "POST /match"
         ],
         "status": "success"
     }
@@ -247,7 +250,7 @@ def health_check():
 
 
 # =========================================================
-# 7. DAY 9: ANALYZE A JOB DESCRIPTION USING THE LLM
+# 7. ANALYZE JOB DESCRIPTION USING THE LLM
 # =========================================================
 
 @app.post("/analyze")
@@ -255,7 +258,8 @@ def analyze_job(request: JobRequest):
     """
     Analyze a job description using the local Ollama LLM.
 
-    Returns detected skills and learning recommendations.
+    Returns the extracted job information, detected skills,
+    and learning recommendations.
     """
 
     try:
@@ -263,9 +267,11 @@ def analyze_job(request: JobRequest):
             request.job_description
         )
 
-        # Validate the most important LLM output fields.
+        # Validate the LLM output.
         if not isinstance(analysis, dict):
-            raise ValueError("LLM response must be a JSON object.")
+            raise ValueError(
+                "LLM response must be a JSON object."
+            )
 
         llm_job_title = analysis.get("job_title", "")
         required_skills = analysis.get("required_skills")
@@ -275,7 +281,9 @@ def analyze_job(request: JobRequest):
         )
 
         if not isinstance(llm_job_title, str):
-            raise ValueError("Invalid job_title returned by the LLM.")
+            raise ValueError(
+                "Invalid job_title returned by the LLM."
+            )
 
         if not isinstance(required_skills, list):
             raise ValueError(
@@ -287,12 +295,20 @@ def analyze_job(request: JobRequest):
                 "Invalid experience_level returned by the LLM."
             )
 
-        # Clean and deduplicate extracted skills.
+        if not all(
+            isinstance(skill, str) and skill.strip()
+            for skill in required_skills
+        ):
+            raise ValueError(
+                "LLM returned invalid required skills."
+            )
+
+        # Clean and deduplicate the extracted skills.
         detected_skills = remove_duplicate_skills(
             required_skills
         )
 
-        # Create learning recommendations.
+        # Generate learning recommendations.
         recommendations = generate_recommendations(
             detected_skills
         )
@@ -311,38 +327,57 @@ def analyze_job(request: JobRequest):
             "status": "success"
         }
 
-    except requests.exceptions.Timeout:
+    except RuntimeError as exc:
+        # llm_client.py converts Ollama request failures
+        # into RuntimeError.
+        error_message = str(exc).casefold()
+
+        if "timed out" in error_message or "timeout" in error_message:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "The local LLM request timed out. "
+                    "Please try again."
+                )
+            ) from exc
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The local LLM service is unavailable. "
+                "Please check Ollama and try again."
+            )
+        ) from exc
+
+    except requests.exceptions.Timeout as exc:
+        # Handles timeouts if a requests timeout exception
+        # reaches this endpoint directly.
         raise HTTPException(
             status_code=504,
             detail=(
                 "The local LLM request timed out. "
                 "Please try again."
             )
-        )
+        ) from exc
 
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exc:
         raise HTTPException(
             status_code=502,
-            detail="Unable to connect to the local Ollama LLM."
-        )
+            detail="Unable to communicate with the local Ollama LLM."
+        ) from exc
 
-    except (
-        ValueError,
-        KeyError,
-        TypeError,
-        json.JSONDecodeError
-    ):
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=502,
             detail=(
                 "The LLM returned an invalid response. "
                 "Please try again."
             )
-        )
+        ) from exc
 
 
 # =========================================================
-# 8. DAY 10: MATCH CANDIDATE SKILLS AGAINST JOB REQUIREMENTS
+# 8. MATCH CANDIDATE SKILLS AGAINST JOB REQUIREMENTS
 # =========================================================
 
 @app.post("/match")
@@ -350,7 +385,7 @@ def match_skills(request: MatchRequest):
     """
     Compare candidate skills with required job skills.
 
-    Calculates match percentage, identifies missing skills,
+    Calculates the match percentage, identifies missing skills,
     and generates learning recommendations.
     """
 
@@ -388,14 +423,14 @@ def match_skills(request: MatchRequest):
         if skill.casefold() in candidate_skill_lookup
     ]
 
-    # Find skills the candidate is missing.
+    # Find missing skills.
     missing_skills = [
         skill
         for skill in required_skills
         if skill.casefold() not in candidate_skill_lookup
     ]
 
-    # Calculate match percentage.
+    # Calculate the match percentage.
     total_required_skills = len(required_skills)
     total_matching_skills = len(matching_skills)
 
@@ -412,7 +447,7 @@ def match_skills(request: MatchRequest):
         missing_skills
     )
 
-    # Return the final structured result.
+    # Return the structured result.
     return {
         "job_title": request.job_title,
         "matching_skills": matching_skills,
@@ -423,3 +458,4 @@ def match_skills(request: MatchRequest):
         "recommendations": recommendations,
         "status": "success"
     }
+
