@@ -68,3 +68,11 @@ The API analyzes job descriptions using a locally hosted LLM
 and returns extracted skills and learning recommendations.
 
 ![Job Description Analysis](assets/analyze-response.png)
+
+### 2. Candidate Skill Matching
+
+The API compares candidate skills against job requirements,
+calculates the match percentage, identifies missing skills,
+and provides learning recommendations.
+
+![Candidate Skill Matching](assets/match-response.png)
