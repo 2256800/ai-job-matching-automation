@@ -9,7 +9,7 @@ from logging_config import logger
 # Ollama Configuration
 # ==========================================
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = "http://host.docker.internal:11434/api/chat"
 MODEL_NAME = "llama3:latest"
 
 
